@@ -1,0 +1,6 @@
+[
+  {"id": "P001", "severity": 0.94, "spo2": 96, "age": 58},
+  {"id": "P002", "severity": 0.18, "spo2": 98, "age": 45},
+  {"id": "P007", "severity": 0.43, "spo2": 90, "age": 52},
+  {"id": "P010", "severity": 0.15, "spo2": 97, "age": 82}
+]
