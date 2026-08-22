@@ -75,6 +75,68 @@ search the graph.
 
 ---
 
-## Step 2 — (next)
+## Step 2 — one rule, fully wired
+
+A rule isn't just a node — it's a node **connected** to its conditions and
+its disposition. Three pieces:
+
+1. The **rule node** itself — carries `priority` and a human-readable
+   `description` (useful later for audit logs and explanations).
+2. A **condition node** — the actual evaluatable predicate: `feature`,
+   `op`, `value`.
+3. Two **edges**: `requires` (rule → condition) and `recommends`
+   (rule → disposition). If a rule has *multiple* `requires` edges, all of
+   them must hold — that's how we get AND logic.
+
+Add this inside `build_graph()`, right before `return g`:
+
+```python
+    # ---- rule 1: severity above 0.9 -------------------------------------
+    # A rule is a node. It's linked to its condition(s) with a "requires"
+    # edge, and to the disposition it recommends with a "recommends" edge.
+    # ALL of a rule's "requires" conditions must hold for it to fire (AND).
+    g.add_node(
+        "R1_high_severity",
+        kind="rule",
+        priority=1,
+        description="Severity score above 0.9 is a top-priority emergency.",
+    )
+    g.add_node(
+        "R1_high_severity::cond0",
+        kind="condition",
+        feature="severity",
+        op=">",
+        value=0.9,
+    )
+    g.add_edge("R1_high_severity", "R1_high_severity::cond0", type="requires")
+    g.add_edge("R1_high_severity", "ImmediateTreatment", type="recommends")
+```
+
+The condition node is named `R1_high_severity::cond0` — namespaced under
+the rule so condition IDs never collide once we have five rules with
+several conditions each.
+
+**Verify:**
+
+```bash
+python -c "
+from ed_triage.knowledge_graph import build_graph
+g = build_graph()
+print('RULE NODE:', g.nodes['R1_high_severity'])
+print('CONDITION NODE:', g.nodes['R1_high_severity::cond0'])
+print('EDGES OUT OF RULE:', list(g.edges('R1_high_severity', data=True)))
+"
+```
+
+Expected:
+```
+RULE NODE: {'kind': 'rule', 'priority': 1, 'description': 'Severity score above 0.9 is a top-priority emergency.'}
+CONDITION NODE: {'kind': 'condition', 'feature': 'severity', 'op': '>', 'value': 0.9}
+EDGES OUT OF RULE: [('R1_high_severity', 'R1_high_severity::cond0', {'type': 'requires'}), ('R1_high_severity', 'ImmediateTreatment', {'type': 'recommends'})]
+```
+
+---
+
+## Step 3 — (next)
 
 *to be added*
