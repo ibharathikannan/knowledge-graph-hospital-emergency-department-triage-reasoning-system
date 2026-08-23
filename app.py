@@ -19,12 +19,13 @@ st.title("ED Triage Reasoning System")
 st.markdown(
     """
     <style>
-    div[data-testid="stIFrame"] {
+    iframe[data-testid="stCustomComponentV1"] {
         margin-left: 0 !important;
         margin-right: auto !important;
+        display: block !important;
     }
     @media (max-width: 768px) {
-        div[data-testid="stIFrame"] {
+        iframe[data-testid="stCustomComponentV1"] {
             transform: scale(0.55);
             transform-origin: top left;
             margin-bottom: -338px;  /* pulls up the blank space the scale leaves behind */

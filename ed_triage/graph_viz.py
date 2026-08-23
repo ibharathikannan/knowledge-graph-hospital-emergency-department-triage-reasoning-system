@@ -111,7 +111,7 @@ def build_agraph(g: nx.DiGraph, fired: list[str] | None = None, winning: list[st
     # whole options object when it hits those. Set them directly on the
     # already-correct nested dicts instead of passing them as kwargs above.
     config.physics["solver"] = "hierarchicalRepulsion"
-    config.layout["hierarchical"]["direction"] = "UD"
+    config.layout["hierarchical"]["direction"] = "LR"
     config.layout["hierarchical"]["sortMethod"] = "directed"
     config.groups = {}  # vis-network rejects groups=None as an invalid type
 
