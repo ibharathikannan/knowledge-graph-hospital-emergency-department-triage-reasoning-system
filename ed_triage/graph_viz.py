@@ -115,20 +115,11 @@ def build_agraph(g: nx.DiGraph, fired: list[str] | None = None, winning: list[st
     config.layout["hierarchical"]["sortMethod"] = "directed"
     config.groups = {}  # vis-network rejects groups=None as an invalid type
 
-    # parentCentralization (streamlit-agraph default: True) centers each
-    # parent node above/before its children DURING LAYOUT -- this operates
-    # on the node coordinates themselves, not the camera, which is why
-    # disabling stabilization.fit alone made no measurable difference
-    # (verified via pixel scan: identical blank-space fraction with and
-    # without fit). The tree's coordinates were symmetric by construction.
-    config.layout["hierarchical"]["parentCentralization"] = False
-
-    # This is the actual mechanism that was re-centering the view regardless
-    # of layout direction: stabilization.fit auto-zooms/pans to CENTER the
-    # graph's bounding box after every stabilization, overriding whatever
-    # position the hierarchical layout itself produced. Verified via pixel
-    # scan of the live canvas: content occupied only the middle ~52% with
-    # near-equal blank margins both sides, even with direction=LR.
-    config.physics["stabilization"]["fit"] = False
+    # fit=False and parentCentralization=False were tried to chase
+    # left-alignment and reverted: fit's whole job is zooming out so
+    # everything stays in view, and disabling it caused real content to
+    # get clipped off-canvas on narrow screens -- confirmed visually, not
+    # just a pixel-alignment miss. Left at streamlit-agraph's defaults
+    # (both True) so nothing gets cut off.
 
     return nodes, edges, config
