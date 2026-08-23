@@ -17,15 +17,37 @@ EDGE_STYLES = {"requires": "solid", "recommends": "dashed", "overrides": "dotted
 
 def main():
     g = build_graph()
-    pos = nx.spring_layout(g, seed=7, k=0.9)
+    pos = nx.spring_layout(g, seed=7, k=1.2)  # Increased spacing for label readability
 
+    # Draw nodes and node labels
     node_colors = [COLORS[g.nodes[n]["kind"]] for n in g.nodes]
-    nx.draw_networkx_nodes(g, pos, node_color=node_colors, node_size=1400)
-    nx.draw_networkx_labels(g, pos, font_size=7)
+    nx.draw_networkx_nodes(g, pos, node_color=node_colors, node_size=1600)
+    nx.draw_networkx_labels(g, pos, font_size=7, font_weight="bold")
 
+    # Draw edges grouped by edge style
     for edge_type, style in EDGE_STYLES.items():
-        edges = [(u, v) for u, v, d in g.edges(data=True) if d["type"] == edge_type]
-        nx.draw_networkx_edges(g, pos, edgelist=edges, style=style, connectionstyle="arc3,rad=0.08")
+        edges = [(u, v) for u, v, d in g.edges(data=True) if d.get("type") == edge_type]
+        nx.draw_networkx_edges(
+            g,
+            pos,
+            edgelist=edges,
+            style=style,
+            arrowstyle="-|>",
+            arrowsize=12,
+            connectionstyle="arc3,rad=0.08",
+        )
+
+    # ---- EXPLICIT EDGE TYPE LABELS ----
+    edge_labels = nx.get_edge_attributes(g, "type")
+    nx.draw_networkx_edge_labels(
+        g,
+        pos,
+        edge_labels=edge_labels,
+        font_color="#D32F2F",  # Explicit red text for clarity
+        font_size=8,
+        font_weight="bold",
+        rotate=False,
+    )
 
     plt.title("ED Triage Clinical Knowledge Graph")
     plt.axis("off")
