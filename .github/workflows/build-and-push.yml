@@ -1,0 +1,35 @@
+name: Build and Push to ACR
+
+on:
+  push:
+    branches:
+      - main  # Triggers the pipeline when you push to main branch
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+    # 1. Checkout repository code
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    # 2. Log in to Azure Container Registry (ACR)
+    - name: Azure Container Registry Login
+      uses: azure/docker-login@v1
+      with:
+        login-server: mlprojectdocker.azurecr.io
+        username: ${{ secrets.ACR_USERNAME }}
+        password: ${{ secrets.ACR_PASSWORD }}
+
+    # 3. Build the Docker Image and push it to your registry
+    - name: Build and Push Docker Image
+      run: |
+        docker build -t mlprojectdocker.azurecr.io/ed-triage-mvp:latest .
+        docker push mlprojectdocker.azurecr.io/ed-triage-mvp:latest
+
+    # NOTE: pushing a new "latest" tag here does NOT automatically restart the live
+    # Web App -- Azure needs to be told to pull it. The one-time fix (not something
+    # this workflow can safely do without another secret) is a Continuous Deployment
+    # webhook: Azure Portal -> ed-triage-mvp Web App -> Deployment Center -> enable
+    # it there. Once enabled, every push above will auto-deploy with no further
+    # GitHub secrets needed.
