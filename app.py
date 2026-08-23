@@ -21,6 +21,7 @@ st.markdown(
     <style>
     iframe[data-testid="stCustomComponentV1"] {
         margin-left: -250px;
+        width: 1400px !important;
     }
     </style>
     """,
