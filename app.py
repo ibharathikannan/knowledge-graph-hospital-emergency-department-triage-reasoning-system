@@ -16,19 +16,6 @@ from ed_triage.predict import predict_severity
 st.set_page_config(page_title="ED Triage Reasoning", layout="wide")
 st.title("ED Triage Reasoning System")
 
-st.markdown(
-    """
-    <style>
-    iframe[data-testid="stCustomComponentV1"] {
-        margin-left: 0 !important;
-        margin-right: auto !important;
-        display: block !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
 respiratory_rate = st.number_input("Respiratory rate (breaths/min)", min_value=8, max_value=40, value=18)
 spo2 = st.number_input("SpO2 (%)", min_value=50, max_value=100, value=97)
 heart_rate = st.number_input("Heart rate (bpm)", min_value=30, max_value=200, value=80)

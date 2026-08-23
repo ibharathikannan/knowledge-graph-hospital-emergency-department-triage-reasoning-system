@@ -58,12 +58,6 @@ def build_agraph(g: nx.DiGraph, fired: list[str] | None = None, winning: list[st
     fired = fired or []
     winning = winning or []
 
-    # Explicit levels, not vis-network's automatic sortMethod inference --
-    # the "overrides" edges (rule -> rule) mix into automatic level
-    # computation alongside "requires"/"recommends" and produce an uneven
-    # result. Fixed rows: rules on top, their conditions/dispositions below.
-    LEVEL_BY_KIND = {"rule": 0, "condition": 1, "disposition": 1}
-
     nodes = []
     for n, data in g.nodes(data=True):
         kind = data["kind"]
@@ -82,7 +76,6 @@ def build_agraph(g: nx.DiGraph, fired: list[str] | None = None, winning: list[st
                 color=color,
                 shadow=glow,
                 borderWidth=3 if glow else 1,
-                level=LEVEL_BY_KIND[kind],
                 font={"color": "#F5F5F5", "size": 14, "strokeWidth": 3, "strokeColor": "#000000"},
             )
         )
@@ -103,23 +96,7 @@ def build_agraph(g: nx.DiGraph, fired: list[str] | None = None, winning: list[st
         height=750,
         directed=True,
         physics=True,
-        hierarchical=True,
+        hierarchical=False,
+        backgroundColor="#1E1E1E",
     )
-    # streamlit-agraph's Config correctly nests these into physics.solver /
-    # layout.hierarchical.*, but ALSO dumps every extra kwarg as a flat
-    # top-level duplicate -- vis-network's strict validator rejects the
-    # whole options object when it hits those. Set them directly on the
-    # already-correct nested dicts instead of passing them as kwargs above.
-    config.physics["solver"] = "hierarchicalRepulsion"
-    config.layout["hierarchical"]["direction"] = "LR"
-    config.layout["hierarchical"]["sortMethod"] = "directed"
-    config.groups = {}  # vis-network rejects groups=None as an invalid type
-
-    # fit=False and parentCentralization=False were tried to chase
-    # left-alignment and reverted: fit's whole job is zooming out so
-    # everything stays in view, and disabling it caused real content to
-    # get clipped off-canvas on narrow screens -- confirmed visually, not
-    # just a pixel-alignment miss. Left at streamlit-agraph's defaults
-    # (both True) so nothing gets cut off.
-
     return nodes, edges, config
