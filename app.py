@@ -12,6 +12,7 @@ from ed_triage.explanation import explain, summarize
 from ed_triage.graph_viz import draw_graph
 from streamlit_agraph import agraph
 from ed_triage.graph_viz import build_agraph
+from ed_triage.predict import predict_severity
 
 st.set_page_config(page_title="ED Triage Reasoning", layout="wide")
 st.title("ED Triage Reasoning System")

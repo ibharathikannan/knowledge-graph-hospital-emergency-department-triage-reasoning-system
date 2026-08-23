@@ -1853,6 +1853,377 @@ watched directly in the browser as the slider moves.
 
 ---
 
+## Step 22 — swapping in `streamlit-agraph`
+
+`st.pyplot()` renders a static image. `streamlit-agraph` renders a real,
+interactive graph — draggable nodes, physics-based layout that visibly
+resettles when the graph changes, pan and zoom. Note up front: it does
+*not* have a built-in rhythmic "pulse" effect (that would need custom
+canvas drawing) — what it genuinely gives is glow/border styling on
+nodes plus that resettling motion, which reads as "alive" in a way the
+static picture never could.
+
+Install it:
+```bash
+pip install streamlit-agraph
+```
+(add `streamlit-agraph` to `requirements.txt`)
+
+### Part A — `build_agraph()` in `graph_viz.py`
+
+Add this import near the top, with the others:
+```python
+from streamlit_agraph import Node, Edge, Config
+```
+
+And these alongside what's already in the file (`draw_graph()` stays —
+`visualize_graph.py` still uses it for the static PNG export):
+
+```python
+NODE_SHAPES = {"rule": "dot", "condition": "dot", "disposition": "box"}
+EDGE_COLORS = {"requires": "#999999", "recommends": "#E7B25C", "overrides": "#E4572E"}
+
+
+def build_agraph(g: nx.DiGraph, fired: list[str] | None = None, winning: list[str] | None = None):
+    fired = fired or []
+    winning = winning or []
+
+    nodes = []
+    for n, data in g.nodes(data=True):
+        kind = data["kind"]
+        if n in winning:
+            color, size, glow = WINNING_COLOR, 35, True
+        elif n in fired:
+            color, size, glow = FIRED_COLOR, 30, True
+        else:
+            color, size, glow = COLORS[kind], 20, False
+        nodes.append(
+            Node(
+                id=n,
+                label=n,
+                size=size,
+                shape=NODE_SHAPES[kind],
+                color=color,
+                shadow=glow,
+                borderWidth=3 if glow else 1,
+                font={"color": "#F5F5F5", "size": 14, "strokeWidth": 3, "strokeColor": "#000000"},
+            )
+        )
+
+    edges = [
+        Edge(
+            source=u,
+            target=v,
+            color=EDGE_COLORS[d["type"]],
+            dashes=(d["type"] != "requires"),
+            width=2,
+        )
+        for u, v, d in g.edges(data=True)
+    ]
+
+    config = Config(
+        width=1100,
+        height=750,
+        directed=True,
+        physics=True,
+        hierarchical=False,
+        backgroundColor="#1E1E1E",
+    )
+    return nodes, edges, config
+```
+
+The `font={"color": "#F5F5F5", ..., "strokeWidth": 3, "strokeColor": "#000000"}`
+gives every label a black outline — that's what keeps labels legible
+regardless of what color node they're sitting on. `backgroundColor` on
+`Config` gives the canvas its own explicit dark background rather than
+relying on Streamlit's page theme.
+
+### Part B — wiring it into `app.py`
+
+Add the imports:
+```python
+from streamlit_agraph import agraph
+from ed_triage.graph_viz import build_agraph
+```
+
+Replace the matplotlib block from Steps 20–21 with:
+
+```python
+st.header("Reasoning graph")
+beaten = [r for r in fired if r not in decision.winning_rules]
+st.caption(f"🟡 fired but overridden: {beaten or 'none'}  |  🔴 winning: {decision.winning_rules}")
+nodes, edges, config = build_agraph(g, fired=fired, winning=decision.winning_rules)
+agraph(nodes=nodes, edges=edges, config=config)
+```
+
+**Verify:**
+
+```bash
+streamlit run app.py
+```
+
+Click-and-drag an empty part of the canvas to pan, scroll the mouse
+wheel to zoom — that's the built-in navigation for this kind of graph
+(no scrollbar needed). Change severity from 0.94 down to 0.15 and watch
+`R1_high_severity` lose its glow while `R2_low_severity` gains one and
+the whole layout resettles.
+
+---
+
+## Step 23 — synthetic training data
+
+Starting the ML piece: the severity score that's been a manual slider
+this whole time is about to become the output of a trained model
+instead. Nothing in `rule_engine.py`, `validators.py`, or
+`explanation.py` changes — they've always just read
+`patient["severity"]` as a plain number; only *where that number comes
+from* changes.
+
+No real labeled patient data exists for this project, so we generate
+plausible synthetic data instead — vitals with realistic ranges, a
+formula with genuine clinical direction (low SpO2 is bad, fever is
+bad), and then, deliberately, we sample a **binary outcome** from that
+risk rather than training on the formula directly. In real life you
+never observe "true" severity, only what actually happened to the
+patient — the model has to recover a good probability estimate from
+binary outcomes, same as real clinical ML does.
+
+Install:
+```bash
+pip install pandas scikit-learn
+```
+(add `pandas>=2.0` and `scikit-learn>=1.4` to `requirements.txt`)
+
+Create `data/generate_training_data.py`:
+
+```python
+"""
+Generates synthetic labeled patient data to train the severity model.
+Run: python data/generate_training_data.py
+"""
+import numpy as np
+import pandas as pd
+
+RNG = np.random.default_rng(42)
+N = 2000
+
+
+def main():
+    respiratory_rate = RNG.normal(18, 4, N).clip(8, 40)
+    spo2 = RNG.normal(95, 4, N).clip(70, 100)
+    heart_rate = RNG.normal(85, 15, N).clip(40, 180)
+    systolic_bp = RNG.normal(122, 18, N).clip(70, 200)
+    temperature = RNG.normal(37.0, 0.8, N).clip(34, 41)
+    age = RNG.integers(18, 95, N)
+
+    # A NEWS2-style intuition: each vital contributes risk the further it
+    # strays from normal. Weights are hand-picked, not clinically tuned --
+    # good enough to give the model real signal to learn from.
+    risk_score = (
+        0.06 * (respiratory_rate - 16)
+        + 0.10 * (94 - spo2)
+        + 0.02 * np.abs(heart_rate - 80)
+        + 0.015 * np.abs(systolic_bp - 120)
+        + 0.6 * np.abs(temperature - 37.0)
+        + 0.01 * age
+        - 3.0  # baseline offset so an "average" patient sits at low risk
+    )
+    probability = 1 / (1 + np.exp(-risk_score))
+    severe = RNG.binomial(1, probability)
+
+    df = pd.DataFrame({
+        "respiratory_rate": respiratory_rate.round(1),
+        "spo2": spo2.round(1),
+        "heart_rate": heart_rate.round(0),
+        "systolic_bp": systolic_bp.round(0),
+        "temperature": temperature.round(1),
+        "age": age,
+        "severe": severe,
+    })
+    df.to_csv("data/training_patients.csv", index=False)
+    print(df.head())
+    print("\nsevere rate:", df["severe"].mean())
+
+
+if __name__ == "__main__":
+    main()
+```
+
+**Verify:**
+
+```bash
+python data/generate_training_data.py
+```
+
+Expected: a preview table, and a "severe rate" roughly in the 10–30%
+range — neither near-0 nor near-1, meaning the data has real signal.
+
+---
+
+## Step 24 — training the model
+
+Create `train_model.py` in the project root:
+
+```python
+"""
+Trains the severity scoring model on the synthetic data from
+data/generate_training_data.py, evaluates it, and saves it to disk.
+Run: python train_model.py
+"""
+from pathlib import Path
+
+import joblib
+import pandas as pd
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, roc_auc_score
+from sklearn.model_selection import train_test_split
+
+FEATURES = ["respiratory_rate", "spo2", "heart_rate", "systolic_bp", "temperature", "age"]
+MODEL_PATH = Path("models/severity_model.joblib")
+
+
+def main():
+    df = pd.read_csv("data/training_patients.csv")
+    X = df[FEATURES]
+    y = df["severe"]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+
+    model = LogisticRegression(max_iter=1000)
+    model.fit(X_train, y_train)
+
+    predicted_probabilities = model.predict_proba(X_test)[:, 1]
+    predicted_labels = model.predict(X_test)
+
+    print("accuracy:", accuracy_score(y_test, predicted_labels))
+    print("roc_auc: ", roc_auc_score(y_test, predicted_probabilities))
+
+    print("\nlearned weight per feature:")
+    for feature, weight in zip(FEATURES, model.coef_[0]):
+        print(f"  {feature:18s} {weight:+.3f}")
+
+    MODEL_PATH.parent.mkdir(exist_ok=True)
+    joblib.dump(model, MODEL_PATH)
+    print(f"\nsaved model to {MODEL_PATH}")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+**What's happening, piece by piece:**
+- `train_test_split(..., stratify=y)` holds back 20% of the data the
+  model never trains on, to check generalization rather than
+  memorization; `stratify=y` keeps the same severe/non-severe ratio in
+  both halves.
+- `LogisticRegression` learns one weight per feature plus a bias, then
+  squashes the weighted sum through a sigmoid — the same shape as Step
+  23's hand-written risk formula, except the weights are now *learned*.
+- `predict_proba(X_test)[:, 1]` — column 1 is P(severe). **This
+  probability becomes the `severity` score** — the same 0–1 number the
+  rule engine has thresholded on all along.
+- `accuracy_score` checks right-or-wrong at a fixed 0.5 cutoff;
+  `roc_auc_score` checks how well the model *ranks* severe patients
+  above non-severe ones across every possible cutoff — more relevant
+  here, since the rule engine thresholds at 0.9 and 0.2, not 0.5.
+- `joblib.dump(...)` saves the trained model so `app.py` can load it
+  instantly later instead of retraining every run.
+
+**Verify:**
+
+```bash
+python train_model.py
+```
+
+Expect accuracy and ROC-AUC comfortably above chance (roughly 0.75+),
+plus a per-feature weight table and a saved file at
+`models/severity_model.joblib`.
+
+**Known, honest limitation to look for:** `spo2`, `respiratory_rate`,
+and `age` should have clearly signed, sensible weights. But
+`heart_rate`, `systolic_bp`, and `temperature` were risky at *both*
+extremes in Step 23's formula (`np.abs(x - normal)`) — a straight-line
+model can't represent "too high AND too low are bad" from the raw
+number alone, so expect those three weights to look weak. Confirmed for
+real on the trained model: a healthy patient scored `0.1175`, a very
+sick one (RR 28, SpO2 88, HR 130, BP 85, fever 39.5, age 82) only
+scored `0.5362` — directionally right, but under-crediting the extreme
+heart rate and blood pressure, exactly because of this linear-model
+limitation. Not a bug — the documented reason the architecture doc
+recommends gradient-boosted trees for production, which *can* represent
+that shape natively.
+
+---
+
+## Step 25 — `ed_triage/predict.py`
+
+A clean wrapper so the rest of the app only ever calls one function,
+never touching `joblib` or `pandas` directly:
+
+```python
+"""
+Loads the trained severity model and exposes a clean predict_severity()
+interface -- the only function the rest of the app needs to know about.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import joblib
+import pandas as pd
+
+MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "severity_model.joblib"
+FEATURES = ["respiratory_rate", "spo2", "heart_rate", "systolic_bp", "temperature", "age"]
+
+_model = None
+
+
+def _get_model():
+    global _model
+    if _model is None:
+        _model = joblib.load(MODEL_PATH)
+    return _model
+
+
+def predict_severity(vitals: dict) -> float:
+    """Given raw vitals, return the model's P(severe) as a float 0-1."""
+    model = _get_model()
+    row = pd.DataFrame([{f: vitals[f] for f in FEATURES}])
+    probability = model.predict_proba(row)[0, 1]
+    return float(probability)
+```
+
+- `MODEL_PATH` is built the same way `DEFAULT_RULES_PATH` was in Step
+  13 — walk up from this file to the project root, then into `models/`.
+- `_model` / `_get_model()` is a lazy-loading cache: the file is only
+  read off disk **once**, on the first call; every call after reuses
+  the model already in memory. `global _model` is what lets the
+  function modify a variable declared outside it.
+- `predict_severity(vitals: dict) -> float` is the only function
+  anything else needs to know about — same principle as `fire()`/
+  `resolve()`: one clean entry point, details hidden behind it.
+
+**Verify:**
+
+```bash
+python -c "
+from ed_triage.predict import predict_severity
+
+healthy = {'respiratory_rate': 16, 'spo2': 98, 'heart_rate': 75, 'systolic_bp': 120, 'temperature': 37.0, 'age': 35}
+sick = {'respiratory_rate': 28, 'spo2': 88, 'heart_rate': 130, 'systolic_bp': 85, 'temperature': 39.5, 'age': 82}
+
+print('healthy:', predict_severity(healthy))
+print('sick:   ', predict_severity(sick))
+"
+```
+
+Expected (confirmed against the actual trained model): `healthy:
+0.1175`, `sick: 0.5362`.
+
+---
+
 ## Where things stand
 
 - `knowledge_graph.py` — clinical knowledge graph, rules loaded from
@@ -1864,10 +2235,14 @@ watched directly in the browser as the slider moves.
 - `tests/test_rule_engine.py` — 17 tests covering all three modules
   above, done (Steps 14–16).
 - `app.py` — Streamlit UI: patient + bed inputs, decision, structured
-  explanation, validator results, and the live-highlighted reasoning
-  graph (Steps 17–20).
+  explanation, validator results, and the live-highlighted interactive
+  reasoning graph (Steps 17–22).
 - `explanation.py` — structured, patient-specific explanations (Step 19).
-- `graph_viz.py` — shared drawing logic for `visualize_graph.py` and
-  the app (Step 20).
-- Not built yet: `demo.py`, severity model (ML), retrieval, bed
-  optimizer, orchestrator, Azure deployment.
+- `graph_viz.py` — shared drawing logic for `visualize_graph.py`
+  (matplotlib) and the app (`streamlit-agraph`) (Steps 20, 22).
+- `data/generate_training_data.py`, `train_model.py`, `predict.py` —
+  synthetic data, a trained logistic regression severity model, and a
+  clean prediction wrapper (Steps 23–25). Not yet wired into `app.py` —
+  the UI still has the manual severity slider.
+- Not built yet: `demo.py`, retrieval, bed optimizer, orchestrator,
+  Azure deployment.
