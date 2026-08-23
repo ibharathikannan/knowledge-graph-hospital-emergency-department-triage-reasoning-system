@@ -115,4 +115,12 @@ def build_agraph(g: nx.DiGraph, fired: list[str] | None = None, winning: list[st
     config.layout["hierarchical"]["sortMethod"] = "directed"
     config.groups = {}  # vis-network rejects groups=None as an invalid type
 
+    # This is the actual mechanism that was re-centering the view regardless
+    # of layout direction: stabilization.fit auto-zooms/pans to CENTER the
+    # graph's bounding box after every stabilization, overriding whatever
+    # position the hierarchical layout itself produced. Verified via pixel
+    # scan of the live canvas: content occupied only the middle ~52% with
+    # near-equal blank margins both sides, even with direction=LR.
+    config.physics["stabilization"]["fit"] = False
+
     return nodes, edges, config
