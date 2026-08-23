@@ -24,13 +24,6 @@ st.markdown(
         margin-right: auto !important;
         display: block !important;
     }
-    @media (max-width: 768px) {
-        iframe[data-testid="stCustomComponentV1"] {
-            transform: scale(0.55);
-            transform-origin: top left;
-            margin-bottom: -338px;  /* pulls up the blank space the scale leaves behind */
-        }
-    }
     </style>
     """,
     unsafe_allow_html=True,
