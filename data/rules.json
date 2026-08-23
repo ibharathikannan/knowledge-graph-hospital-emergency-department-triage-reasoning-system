@@ -1,0 +1,43 @@
+{
+  "rules": {
+    "R1_high_severity": {
+      "priority": 1,
+      "description": "Severity score above 0.9 is a top-priority emergency.",
+      "disposition": "ImmediateTreatment",
+      "conditions": [{"feature": "severity", "op": ">", "value": 0.9}]
+    },
+    "R2_low_severity": {
+      "priority": 3,
+      "description": "Severity score below 0.2, no other red flags.",
+      "disposition": "HomeCare",
+      "conditions": [{"feature": "severity", "op": "<", "value": 0.2}]
+    },
+    "R3_low_oxygen": {
+      "priority": 1,
+      "description": "SpO2 below 92% is emergent regardless of composite score.",
+      "disposition": "ImmediateTreatment",
+      "conditions": [{"feature": "spo2", "op": "<", "value": 92}]
+    },
+    "R4_elderly_min_review": {
+      "priority": 2,
+      "description": "Patients over 75 get at least a doctor review.",
+      "disposition": "DoctorReview",
+      "conditions": [{"feature": "age", "op": ">", "value": 75}]
+    },
+    "R5_mid_severity": {
+      "priority": 2,
+      "description": "Mid-range severity score defaults to a doctor review.",
+      "disposition": "DoctorReview",
+      "conditions": [
+        {"feature": "severity", "op": ">=", "value": 0.2},
+        {"feature": "severity", "op": "<", "value": 0.9}
+      ]
+    }
+  },
+  "overrides": [
+    ["R3_low_oxygen", "R2_low_severity"],
+    ["R1_high_severity", "R4_elderly_min_review"],
+    ["R3_low_oxygen", "R4_elderly_min_review"],
+    ["R3_low_oxygen", "R5_mid_severity"]
+  ]
+}

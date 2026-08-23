@@ -604,47 +604,49 @@ Add `import math` to your imports at the top, then add this at the
 bottom of `rule_engine.py`:
 
 ```python
-def _feature_ranges(conds: list[dict]) -> dict[str, tuple]:
+def _feature_ranges(conditions: list[dict]) -> dict[str, tuple]:
     """Intersect every condition on the same feature into one
-    (lo, lo_inclusive, hi, hi_inclusive) interval."""
+    (lower_bound, lower_inclusive, upper_bound, upper_inclusive) interval."""
     ranges: dict[str, tuple] = {}
-    for c in conds:
-        feat = c["feature"]
-        lo, lo_incl, hi, hi_incl = ranges.get(feat, (-math.inf, True, math.inf, True))
-        op, val = c["op"], c["value"]
-        if op == ">" and (val > lo or (val == lo and lo_incl)):
-            lo, lo_incl = val, False
-        elif op == ">=" and (val > lo or (val == lo and lo_incl)):
-            lo, lo_incl = val, True
-        elif op == "<" and (val < hi or (val == hi and hi_incl)):
-            hi, hi_incl = val, False
-        elif op == "<=" and (val < hi or (val == hi and hi_incl)):
-            hi, hi_incl = val, True
+    for condition in conditions:
+        feature = condition["feature"]
+        lower_bound, lower_inclusive, upper_bound, upper_inclusive = ranges.get(
+            feature, (-math.inf, True, math.inf, True)
+        )
+        op, threshold = condition["op"], condition["value"]
+        if op == ">" and (threshold > lower_bound or (threshold == lower_bound and lower_inclusive)):
+            lower_bound, lower_inclusive = threshold, False
+        elif op == ">=" and (threshold > lower_bound or (threshold == lower_bound and lower_inclusive)):
+            lower_bound, lower_inclusive = threshold, True
+        elif op == "<" and (threshold < upper_bound or (threshold == upper_bound and upper_inclusive)):
+            upper_bound, upper_inclusive = threshold, False
+        elif op == "<=" and (threshold < upper_bound or (threshold == upper_bound and upper_inclusive)):
+            upper_bound, upper_inclusive = threshold, True
         elif op == "==":
-            lo, lo_incl, hi, hi_incl = val, True, val, True
-        ranges[feat] = (lo, lo_incl, hi, hi_incl)
+            lower_bound, lower_inclusive, upper_bound, upper_inclusive = threshold, True, threshold, True
+        ranges[feature] = (lower_bound, lower_inclusive, upper_bound, upper_inclusive)
     return ranges
 
 
-def _ranges_overlap(a: tuple, b: tuple) -> bool:
-    lo1, li1, hi1, hii1 = a
-    lo2, li2, hi2, hii2 = b
-    if lo1 > hi2 or lo2 > hi1:
+def _ranges_overlap(range_a: tuple, range_b: tuple) -> bool:
+    lower_a, lower_a_inclusive, upper_a, upper_a_inclusive = range_a
+    lower_b, lower_b_inclusive, upper_b, upper_b_inclusive = range_b
+    if lower_a > upper_b or lower_b > upper_a:
         return False
-    if lo1 == hi2 and not (li1 and hii2):
+    if lower_a == upper_b and not (lower_a_inclusive and upper_b_inclusive):
         return False
-    if lo2 == hi1 and not (li2 and hii1):
+    if lower_b == upper_a and not (lower_b_inclusive and upper_a_inclusive):
         return False
     return True
 
 
-def _jointly_satisfiable(g, r1: str, r2: str) -> bool:
+def _jointly_satisfiable(g, rule_a: str, rule_b: str) -> bool:
     """Could one patient make both rules fire at once? True unless they
     share a feature whose required ranges don't overlap."""
-    ranges1 = _feature_ranges(conditions_of(g, r1))
-    ranges2 = _feature_ranges(conditions_of(g, r2))
-    shared = set(ranges1) & set(ranges2)
-    return all(_ranges_overlap(ranges1[f], ranges2[f]) for f in shared)
+    ranges_a = _feature_ranges(conditions_of(g, rule_a))
+    ranges_b = _feature_ranges(conditions_of(g, rule_b))
+    shared_features = set(ranges_a) & set(ranges_b)
+    return all(_ranges_overlap(ranges_a[feature], ranges_b[feature]) for feature in shared_features)
 
 
 def static_inconsistencies(g) -> list[tuple[str, str, str, str]]:
@@ -653,14 +655,14 @@ def static_inconsistencies(g) -> list[tuple[str, str, str, str]]:
     a genuine gap in the rule base, found without needing a patient.
     Returns (rule_a, rule_b, disposition_a, disposition_b) tuples."""
     issues = []
-    for r1, r2 in itertools.combinations(rule_ids(g), 2):
-        d1, d2 = disposition_of(g, r1), disposition_of(g, r2)
-        if d1 == d2:
+    for rule_a, rule_b in itertools.combinations(rule_ids(g), 2):
+        disposition_a, disposition_b = disposition_of(g, rule_a), disposition_of(g, rule_b)
+        if disposition_a == disposition_b:
             continue
-        if overrides(g, r1, r2) or overrides(g, r2, r1):
+        if overrides(g, rule_a, rule_b) or overrides(g, rule_b, rule_a):
             continue
-        if _jointly_satisfiable(g, r1, r2):
-            issues.append((r1, r2, d1, d2))
+        if _jointly_satisfiable(g, rule_a, rule_b):
+            issues.append((rule_a, rule_b, disposition_a, disposition_b))
     return issues
 ```
 
@@ -722,17 +724,12 @@ If everything above matches, all 6 tests should pass — that's the real
 
 ---
 
-## Step 9 — rules-to-JSON refactor (deferred)
+## Aside — rules-to-JSON refactor
 
-**Status: skipped for now, on purpose.** `knowledge_graph.py` and
-`rule_engine.py` are done and working (all 6 tests pass) with the rules
-hardcoded in `build_graph()`. Pulling rule content out into `rules.json`
-— so a non-programmer could edit thresholds without touching Python —
-is a real improvement worth doing eventually, but it's a refactor of
-working code, not new capability. Revisit this once more of the system
-exists and it's clearer how the rule file should be shaped (e.g. once
-Azure/Cosmos DB is in the picture, per the earlier "local first, Azure
-later" decision).
+Originally deferred here (rules stayed hardcoded in `build_graph()` while
+`rule_engine.py` and `validators.py` got built). Now actually done — see
+**Step 13** at the end of this log, after the numbering below finishes
+the validator chain.
 
 ---
 
@@ -1000,14 +997,540 @@ working code.
 
 ---
 
+## Step 13 — separating rule content from rule construction
+
+Pulling the rule *content* out of Python into `data/rules.json`, and
+making `build_graph()` generic — it stops knowing about R1–R5
+specifically and just reads whatever's in the file.
+
+### Part A — `data/rules.json`
+
+A straight data transcription of what was hardcoded in `build_graph()`
+— nothing new to understand, just moving it:
+
+```json
+{
+  "rules": {
+    "R1_high_severity": {
+      "priority": 1,
+      "description": "Severity score above 0.9 is a top-priority emergency.",
+      "disposition": "ImmediateTreatment",
+      "conditions": [{"feature": "severity", "op": ">", "value": 0.9}]
+    },
+    "R2_low_severity": {
+      "priority": 3,
+      "description": "Severity score below 0.2, no other red flags.",
+      "disposition": "HomeCare",
+      "conditions": [{"feature": "severity", "op": "<", "value": 0.2}]
+    },
+    "R3_low_oxygen": {
+      "priority": 1,
+      "description": "SpO2 below 92% is emergent regardless of composite score.",
+      "disposition": "ImmediateTreatment",
+      "conditions": [{"feature": "spo2", "op": "<", "value": 92}]
+    },
+    "R4_elderly_min_review": {
+      "priority": 2,
+      "description": "Patients over 75 get at least a doctor review.",
+      "disposition": "DoctorReview",
+      "conditions": [{"feature": "age", "op": ">", "value": 75}]
+    },
+    "R5_mid_severity": {
+      "priority": 2,
+      "description": "Mid-range severity score defaults to a doctor review.",
+      "disposition": "DoctorReview",
+      "conditions": [
+        {"feature": "severity", "op": ">=", "value": 0.2},
+        {"feature": "severity", "op": "<", "value": 0.9}
+      ]
+    }
+  },
+  "overrides": [
+    ["R3_low_oxygen", "R2_low_severity"],
+    ["R1_high_severity", "R4_elderly_min_review"],
+    ["R3_low_oxygen", "R4_elderly_min_review"],
+    ["R3_low_oxygen", "R5_mid_severity"]
+  ]
+}
+```
+
+(`R4_elderly_min_review` / `R2_low_severity` still has no entry in
+`"overrides"` — the deliberate gap moves with the data.)
+
+### Part B — `build_graph()` becomes a loader
+
+Replace the imports at the top of `knowledge_graph.py` with:
+
+```python
+"""
+Clinical Knowledge Graph for the ED Triage Reasoning System.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import networkx as nx
+
+ACUITY_RANK = {
+    "ImmediateTreatment": 0,
+    "DoctorReview": 1,
+    "HomeCare": 2,
+}
+
+DEFAULT_RULES_PATH = Path(__file__).resolve().parent.parent / "data" / "rules.json"
+
+
+def load_rules(path: Path = DEFAULT_RULES_PATH) -> dict:
+    return json.loads(Path(path).read_text())
+```
+
+Then replace the entire `build_graph()` function with:
+
+```python
+def build_graph(spec: dict | None = None) -> nx.DiGraph:
+    if spec is None:
+        spec = load_rules()
+
+    g = nx.DiGraph()
+
+    # ---- dispositions ---------------------------------------------------
+    for disposition in ACUITY_RANK:
+        g.add_node(disposition, kind="disposition")
+
+    # ---- rules + their conditions ----------------------------------------
+    for rule_id, rule_spec in spec["rules"].items():
+        g.add_node(
+            rule_id,
+            kind="rule",
+            priority=rule_spec["priority"],
+            description=rule_spec["description"],
+        )
+        g.add_edge(rule_id, rule_spec["disposition"], type="recommends")
+        for i, cond in enumerate(rule_spec["conditions"]):
+            cond_id = f"{rule_id}::cond{i}"
+            g.add_node(cond_id, kind="condition", **cond)
+            g.add_edge(rule_id, cond_id, type="requires")
+
+    # ---- explicit priority overrides --------------------------------------
+    for winner, loser in spec["overrides"]:
+        g.add_edge(winner, loser, type="overrides")
+
+    return g
+```
+
+**What changed conceptually:** `build_graph()` no longer mentions
+R1–R5 anywhere. It only knows the *shape* a rule spec has (`priority`,
+`description`, `disposition`, `conditions`) — not what any particular
+rule says. Adding rule #6 tomorrow is a `rules.json` edit;
+`knowledge_graph.py` never changes. `spec: dict | None = None` also
+means tests can hand it a small in-memory dict directly, without
+touching the file at all.
+
+`rule_ids`, `conditions_of`, `disposition_of`, `overrides` from Step 5
+don't change — they just read whatever graph they're given, regardless
+of where it came from.
+
+**Verify** — should print exactly what it did before the refactor,
+proving the swap was behavior-preserving:
+
+```bash
+python -c "
+from ed_triage.knowledge_graph import build_graph, rule_ids
+from ed_triage.rule_engine import fire, resolve, static_inconsistencies
+
+g = build_graph()
+print('rule count:', len(rule_ids(g)))
+print('inconsistencies:', static_inconsistencies(g))
+print()
+
+for pid, p in {
+    'P001': {'severity': 0.94, 'spo2': 96, 'age': 58},
+    'P002': {'severity': 0.18, 'spo2': 98, 'age': 45},
+    'P007': {'severity': 0.43, 'spo2': 90, 'age': 52},
+    'P010': {'severity': 0.15, 'spo2': 97, 'age': 82},
+}.items():
+    d = resolve(g, fire(g, p))
+    print(pid, d.disposition, d.winning_rules, d.has_conflict)
+"
+```
+
+Expected — identical to every earlier run:
+```
+rule count: 5
+inconsistencies: [('R2_low_severity', 'R4_elderly_min_review', 'HomeCare', 'DoctorReview')]
+
+P001 ImmediateTreatment ['R1_high_severity'] False
+P002 HomeCare ['R2_low_severity'] False
+P007 ImmediateTreatment ['R3_low_oxygen'] False
+P010 DoctorReview ['R4_elderly_min_review'] True
+```
+
+---
+
+## Step 14 — `tests/test_rule_engine.py`, part 1: setup + `knowledge_graph.py` tests
+
+You've already done every one of these checks by hand, over and over,
+with the verify commands. A test is just one of those checks made
+permanent — `print(...)` becomes `assert ...`, so it checks itself
+forever instead of you re-reading output each time.
+
+Start `tests/test_rule_engine.py` with the setup boilerplate and one
+shared dict of sample patients (used by every test in this file, so we
+don't retype it four times):
+
+```python
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from ed_triage.knowledge_graph import build_graph, rule_ids, overrides
+from ed_triage.rule_engine import fire, resolve, static_inconsistencies
+
+PATIENTS = {
+    "P001": {"severity": 0.94, "spo2": 96, "age": 58},
+    "P002": {"severity": 0.18, "spo2": 98, "age": 45},
+    "P007": {"severity": 0.43, "spo2": 90, "age": 52},
+    "P010": {"severity": 0.15, "spo2": 97, "age": 82},
+}
+```
+
+`sys.path.insert(...)` just makes sure Python can find the `ed_triage`
+package no matter which folder you run `pytest` from — a safety net,
+not something specific to this project.
+
+Now the first two tests, covering `knowledge_graph.py`:
+
+```python
+def test_build_graph_loads_five_rules_by_default():
+    g = build_graph()
+    assert len(rule_ids(g)) == 5
+
+
+def test_deliberate_gap_has_no_override_edge():
+    g = build_graph()
+    assert not overrides(g, "R4_elderly_min_review", "R2_low_severity")
+    assert not overrides(g, "R2_low_severity", "R4_elderly_min_review")
+```
+
+These are exactly the two facts confirmed by hand back in Step 4 —
+"5 rules exist" and "the gap really has no edge either direction" — now
+written as `assert` instead of `print`.
+
+**Verify:**
+
+```bash
+pytest tests/test_rule_engine.py -v
+```
+
+Expected:
+```
+tests/test_rule_engine.py::test_build_graph_loads_five_rules_by_default PASSED
+tests/test_rule_engine.py::test_deliberate_gap_has_no_override_edge PASSED
+
+2 passed
+```
+
+---
+
+## Step 15 — `rule_engine.py` tests
+
+These six are the ones verified the most already — each is a patient
+scenario run by hand multiple times. Add them after the two from
+Step 14:
+
+```python
+def test_high_severity_immediate():
+    g = build_graph()
+    decision = resolve(g, fire(g, PATIENTS["P001"]))
+    assert decision.disposition == "ImmediateTreatment"
+    assert not decision.has_conflict
+
+
+def test_low_severity_home_care():
+    g = build_graph()
+    decision = resolve(g, fire(g, PATIENTS["P002"]))
+    assert decision.disposition == "HomeCare"
+    assert not decision.has_conflict
+
+
+def test_low_oxygen_overrides_mid_severity():
+    g = build_graph()
+    decision = resolve(g, fire(g, PATIENTS["P007"]))
+    assert decision.disposition == "ImmediateTreatment"
+    assert decision.winning_rules == ["R3_low_oxygen"]
+    assert not decision.has_conflict
+
+
+def test_unresolved_conflict_falls_back_conservatively():
+    g = build_graph()
+    decision = resolve(g, fire(g, PATIENTS["P010"]))
+    assert decision.disposition == "DoctorReview"  # more urgent of the two
+    assert decision.has_conflict
+    assert ("R2_low_severity", "R4_elderly_min_review") in decision.unresolved_conflicts
+
+
+def test_no_data_no_fire():
+    g = build_graph()
+    decision = resolve(g, fire(g, {}))
+    assert decision.disposition is None
+    assert decision.fired_rules == []
+
+
+def test_static_inconsistency_found():
+    g = build_graph()
+    issues = static_inconsistencies(g)
+    pairs = [(a, b) for a, b, _, _ in issues]
+    assert ("R2_low_severity", "R4_elderly_min_review") in pairs
+    assert len(issues) == 1  # everything else is resolved by an override edge
+```
+
+Nothing here is new — `test_static_inconsistency_found` is literally
+the Step 8 verify command turned into an assertion, and
+`test_unresolved_conflict_falls_back_conservatively` is P010 from
+Step 7.
+
+**Verify:**
+
+```bash
+pytest tests/test_rule_engine.py -v
+```
+
+Expected — all 8 now (the 2 from Step 14 plus these 6):
+```
+8 passed
+```
+
+---
+
+## Step 16 — `validators.py` tests (the last one)
+
+First, update the `rule_engine` import line to add `Decision`, and add a
+new import line for `validators`:
+
+```python
+from ed_triage.knowledge_graph import build_graph, rule_ids, overrides
+from ed_triage.rule_engine import Decision, fire, resolve, static_inconsistencies
+from ed_triage.validators import (
+    check_conflicting_reasons,
+    check_missing_explanation,
+    check_resource_validation,
+    check_rule_inconsistency,
+    run_all,
+)
+```
+
+Now the tests — nine of them, but each is short:
+
+```python
+def test_missing_explanation_passes_for_a_normal_decision():
+    g = build_graph()
+    decision = resolve(g, fire(g, PATIENTS["P001"]))
+    assert check_missing_explanation(g, decision).passed
+
+
+def test_missing_explanation_fails_when_nothing_fired():
+    g = build_graph()
+    decision = resolve(g, fire(g, {}))
+    assert not check_missing_explanation(g, decision).passed
+
+
+def test_rule_inconsistency_check_mirrors_decision_conflict():
+    g = build_graph()
+    ok_decision = resolve(g, fire(g, PATIENTS["P007"]))
+    conflicted_decision = resolve(g, fire(g, PATIENTS["P010"]))
+    assert check_rule_inconsistency(ok_decision).passed
+    assert not check_rule_inconsistency(conflicted_decision).passed
+
+
+def test_conflicting_reasons_passes_normally():
+    g = build_graph()
+    decision = resolve(g, fire(g, PATIENTS["P001"]))
+    assert check_conflicting_reasons(g, decision).passed
+
+
+def test_conflicting_reasons_catches_a_corrupted_decision():
+    g = build_graph()
+    bad_decision = Decision(
+        disposition="HomeCare",
+        fired_rules=["R1_high_severity"],
+        winning_rules=["R1_high_severity"],
+    )
+    assert not check_conflicting_reasons(g, bad_decision).passed
+
+
+def test_resource_validation_passes_when_bed_available():
+    g = build_graph()
+    decision = resolve(g, fire(g, PATIENTS["P001"]))
+    assert check_resource_validation(decision, {"ICU": 2, "Ward": 5}).passed
+
+
+def test_resource_validation_fails_when_no_beds():
+    g = build_graph()
+    decision = resolve(g, fire(g, PATIENTS["P001"]))
+    assert not check_resource_validation(decision, {"ICU": 0, "Ward": 5}).passed
+
+
+def test_resource_validation_home_care_needs_no_bed():
+    g = build_graph()
+    decision = resolve(g, fire(g, PATIENTS["P002"]))  # HomeCare
+    assert check_resource_validation(decision, {"ICU": 0, "Ward": 0}).passed
+
+
+def test_run_all_reports_four_checks():
+    g = build_graph()
+    decision = resolve(g, fire(g, PATIENTS["P001"]))
+    results = run_all(g, decision, {"ICU": 2, "Ward": 5})
+    assert len(results) == 4
+    assert all(r.passed for r in results)
+```
+
+`test_conflicting_reasons_catches_a_corrupted_decision` is the exact
+"fake a future bug" trick from Step 11's verify command — same idea,
+now permanent.
+
+**Verify — the whole suite:**
+
+```bash
+pytest tests/test_rule_engine.py -v
+```
+
+Expected: **17 passed** (8 from Steps 14–15, plus these 9).
+
+---
+
+## Step 17 — a UI, part 1: the skeleton
+
+Streamlit turns a plain script into a web app with almost no new
+syntax — no HTML/JS, no routes to wire up.
+
+Install it:
+```bash
+pip install streamlit
+```
+(and add `streamlit>=1.35` to `requirements.txt`)
+
+Create `app.py` in the project root:
+
+```python
+"""
+Streamlit UI: input a patient, see the knowledge graph reason about them.
+Run: streamlit run app.py
+"""
+import streamlit as st
+
+from ed_triage.knowledge_graph import build_graph
+from ed_triage.rule_engine import fire, resolve
+
+st.set_page_config(page_title="ED Triage Reasoning", layout="wide")
+st.title("ED Triage Reasoning System")
+
+st.header("Patient")
+severity = st.slider("Severity score", 0.0, 1.0, 0.5, 0.01)
+spo2 = st.number_input("SpO2 (%)", min_value=50, max_value=100, value=97)
+age = st.number_input("Age", min_value=0, max_value=120, value=50)
+
+patient = {"severity": severity, "spo2": spo2, "age": age}
+
+g = build_graph()
+fired = fire(g, patient)
+decision = resolve(g, fired)
+
+st.header("Result")
+st.write("Fired rules:", fired)
+st.write("Decision:", decision.disposition)
+```
+
+The one new concept that matters: there's no "submit button" or event
+handler. Streamlit reruns the **entire script, top to bottom**, every
+time you touch a widget. Move the slider → the whole file executes
+again with the new value → `patient`/`fired`/`decision` all recompute →
+the page updates. No callbacks to wire up, the code stays linear.
+
+**Verify:**
+
+```bash
+streamlit run app.py
+```
+
+Opens a browser tab automatically. Move the severity slider — "Fired
+rules" and "Decision" should update live. Try 0.95 (→
+`R1_high_severity` → `ImmediateTreatment`), then 0.1 (→
+`R2_low_severity` → `HomeCare`).
+
+---
+
+## Step 18 — bed availability inputs + the validator results
+
+`{"ICU": 2, "Ward": 5}` had only ever existed in verify commands and
+tests typed by hand — nowhere in `app.py`. Fixing that: same three-line
+pattern as `patient` from Step 17, just two more widgets.
+
+Add this to `app.py`, right after the patient inputs:
+
+```python
+st.header("Bed availability")
+icu_beds = st.number_input("ICU beds free", min_value=0, max_value=20, value=2)
+ward_beds = st.number_input("Ward beds free", min_value=0, max_value=50, value=5)
+
+bed_state = {"ICU": icu_beds, "Ward": ward_beds}
+```
+
+Two widgets holding the *current* value, one dict built fresh from
+them on every rerun — no different from how `severity` worked.
+
+Add the `run_all` import at the top:
+
+```python
+from ed_triage.validators import run_all
+```
+
+Then replace the whole `st.header("Result")` block at the bottom with:
+
+```python
+st.header("Result")
+if decision.disposition:
+    st.subheader(decision.disposition)
+    for rule_id in decision.winning_rules:
+        st.write(f"- **{rule_id}**: {g.nodes[rule_id]['description']}")
+else:
+    st.subheader("No rule fired")
+
+st.header("Validation")
+checks = run_all(g, decision, bed_state)
+for check in checks:
+    icon = "✅" if check.passed else "❌"
+    st.write(f"{icon} **{check.name}** — {check.reason}")
+```
+
+Two new things, both small: `g.nodes[rule_id]['description']` pulls
+the same human-readable text seen in every rule since Step 2 — the
+"explanation," now displayed instead of printed. The ✅/❌ loop is
+`run_all()` from Step 12, rendered instead of printed.
+
+**Verify:**
+
+```bash
+streamlit run app.py
+```
+
+Try severity 0.95 with ICU beds at 0 — you should see
+`ImmediateTreatment`, the `R1_high_severity` description, and a ❌ next
+to `resource_validation`. Bump ICU beds back up to 1+ and it should
+flip to ✅ live, no page reload.
+
+---
+
 ## Where things stand
 
-- `knowledge_graph.py` — clinical knowledge graph (5 rules, override
-  edges, 1 deliberate gap), done.
+- `knowledge_graph.py` — clinical knowledge graph, rules loaded from
+  `data/rules.json` (5 rules, override edges, 1 deliberate gap), done.
 - `rule_engine.py` — `fire()`, `resolve()`, `static_inconsistencies()`,
   done.
 - `validators.py` — all 4 checks from the architecture doc's Validator
   Chain, done.
-- Deferred on purpose: rules-to-JSON refactor (Step 9, original
-  numbering), `demo.py`, severity model (ML), retrieval, bed optimizer,
-  orchestrator, Azure deployment.
+- `tests/test_rule_engine.py` — 17 tests covering all three modules
+  above, done (Steps 14–16).
+- Not built yet: `demo.py`, severity model (ML), retrieval, bed
+  optimizer, orchestrator, Azure deployment.

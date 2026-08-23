@@ -10,6 +10,8 @@ from typing import Optional
 
 from ed_triage.knowledge_graph import ACUITY_RANK, conditions_of, disposition_of, overrides, rule_ids
 
+import math
+
 _OPS = {
     ">": operator.gt,
     ">=": operator.ge,
@@ -29,10 +31,10 @@ def _condition_holds(cond: dict, patient: dict) -> bool:
 def fire(g, patient: dict) -> list[str]:
     """Rules whose conditions ALL hold (AND) for this patient."""
     fired = []
-    for rid in rule_ids(g):
-        conds = conditions_of(g, rid)
+    for rule_id in rule_ids(g):
+        conds = conditions_of(g, rule_id)
         if conds and all(_condition_holds(c, patient) for c in conds):
-            fired.append(rid)
+            fired.append(rule_id)
     return fired
 
 
@@ -87,3 +89,64 @@ def resolve(g, fired_rules: list[str]) -> Decision:
         winning_rules=surviving_groups[decision_disposition],
         unresolved_conflicts=sorted(unresolved),
     )
+
+
+def _feature_ranges(conditions: list[dict]) -> dict[str, tuple]:
+    """Intersect every condition on the same feature into one
+    (lower_bound, lower_inclusive, upper_bound, upper_inclusive) interval."""
+    ranges: dict[str, tuple] = {}
+    for condition in conditions:
+        feature = condition["feature"]
+        lower_bound, lower_inclusive, upper_bound, upper_inclusive = ranges.get(
+            feature, (-math.inf, True, math.inf, True)
+        )
+        op, threshold = condition["op"], condition["value"]
+        if op == ">" and (threshold > lower_bound or (threshold == lower_bound and lower_inclusive)):
+            lower_bound, lower_inclusive = threshold, False
+        elif op == ">=" and (threshold > lower_bound or (threshold == lower_bound and lower_inclusive)):
+            lower_bound, lower_inclusive = threshold, True
+        elif op == "<" and (threshold < upper_bound or (threshold == upper_bound and upper_inclusive)):
+            upper_bound, upper_inclusive = threshold, False
+        elif op == "<=" and (threshold < upper_bound or (threshold == upper_bound and upper_inclusive)):
+            upper_bound, upper_inclusive = threshold, True
+        elif op == "==":
+            lower_bound, lower_inclusive, upper_bound, upper_inclusive = threshold, True, threshold, True
+        ranges[feature] = (lower_bound, lower_inclusive, upper_bound, upper_inclusive)
+    return ranges
+
+
+def _ranges_overlap(range_a: tuple, range_b: tuple) -> bool:
+    lower_a, lower_a_inclusive, upper_a, upper_a_inclusive = range_a
+    lower_b, lower_b_inclusive, upper_b, upper_b_inclusive = range_b
+    if lower_a > upper_b or lower_b > upper_a:
+        return False
+    if lower_a == upper_b and not (lower_a_inclusive and upper_b_inclusive):
+        return False
+    if lower_b == upper_a and not (lower_b_inclusive and upper_a_inclusive):
+        return False
+    return True
+
+
+def _jointly_satisfiable(g, rule_a: str, rule_b: str) -> bool:
+    """Could one patient make both rules fire at once? True unless they
+    share a feature whose required ranges don't overlap."""
+    ranges_a = _feature_ranges(conditions_of(g, rule_a))
+    ranges_b = _feature_ranges(conditions_of(g, rule_b))
+    shared_features = set(ranges_a) & set(ranges_b)
+    return all(_ranges_overlap(ranges_a[feature], ranges_b[feature]) for feature in shared_features)
+
+
+def static_inconsistencies(g) -> list[tuple[str, str, str, str]]:
+    """Every pair of rules that CAN fire on the same patient, recommend
+    DIFFERENT dispositions, and have no override edge resolving them --
+    a genuine gap in the rule base, found without needing a patient."""
+    issues = []
+    for rule_a, rule_b in itertools.combinations(rule_ids(g), 2):
+        disposition_a, disposition_b = disposition_of(g, rule_a), disposition_of(g, rule_b)
+        if disposition_a == disposition_b:
+            continue
+        if overrides(g, rule_a, rule_b) or overrides(g, rule_b, rule_a):
+            continue
+        if _jointly_satisfiable(g, rule_a, rule_b):
+            issues.append((rule_a, rule_b, disposition_a, disposition_b))
+    return issues
