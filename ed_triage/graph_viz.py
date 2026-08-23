@@ -96,7 +96,7 @@ def build_agraph(g: nx.DiGraph, fired: list[str] | None = None, winning: list[st
         height=750,
         directed=True,
         physics=True,
-        hierarchical=False,
+        hierarchical=True,
         backgroundColor="#1E1E1E",
     )
     return nodes, edges, config
