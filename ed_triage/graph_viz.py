@@ -58,6 +58,12 @@ def build_agraph(g: nx.DiGraph, fired: list[str] | None = None, winning: list[st
     fired = fired or []
     winning = winning or []
 
+    # Explicit levels, not vis-network's automatic sortMethod inference --
+    # the "overrides" edges (rule -> rule) mix into automatic level
+    # computation alongside "requires"/"recommends" and produce an uneven
+    # result. Fixed rows: rules on top, their conditions/dispositions below.
+    LEVEL_BY_KIND = {"rule": 0, "condition": 1, "disposition": 1}
+
     nodes = []
     for n, data in g.nodes(data=True):
         kind = data["kind"]
@@ -76,6 +82,7 @@ def build_agraph(g: nx.DiGraph, fired: list[str] | None = None, winning: list[st
                 color=color,
                 shadow=glow,
                 borderWidth=3 if glow else 1,
+                level=LEVEL_BY_KIND[kind],
                 font={"color": "#F5F5F5", "size": 14, "strokeWidth": 3, "strokeColor": "#000000"},
             )
         )
