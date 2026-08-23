@@ -69,3 +69,26 @@ def build_graph() -> nx.DiGraph:
         g.add_edge(winner, loser, type="overrides")
 
     return g
+
+
+
+
+def rule_ids(g: nx.DiGraph) -> list[str]:
+    return [n for n, d in g.nodes(data=True) if d.get("kind") == "rule"]
+
+
+def conditions_of(g: nx.DiGraph, rule_id: str) -> list[dict]:
+    return [
+        {"id": n, **g.nodes[n]}
+        for n in g.successors(rule_id)
+        if g[rule_id][n]["type"] == "requires"
+    ]
+
+
+def disposition_of(g: nx.DiGraph, rule_id: str) -> str:
+    return next(n for n in g.successors(rule_id) if g[rule_id][n]["type"] == "recommends")
+
+
+def overrides(g: nx.DiGraph, a: str, b: str) -> bool:
+    """True if rule `a` explicitly wins over rule `b`."""
+    return g.has_edge(a, b) and g[a][b].get("type") == "overrides"
