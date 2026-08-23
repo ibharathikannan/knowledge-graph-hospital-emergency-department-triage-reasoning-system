@@ -104,9 +104,15 @@ def build_agraph(g: nx.DiGraph, fired: list[str] | None = None, winning: list[st
         directed=True,
         physics=True,
         hierarchical=True,
-        solver="hierarchicalRepulsion",
-        direction="UD",
-        sortMethod="directed",
-        backgroundColor="#1E1E1E",
     )
+    # streamlit-agraph's Config correctly nests these into physics.solver /
+    # layout.hierarchical.*, but ALSO dumps every extra kwarg as a flat
+    # top-level duplicate -- vis-network's strict validator rejects the
+    # whole options object when it hits those. Set them directly on the
+    # already-correct nested dicts instead of passing them as kwargs above.
+    config.physics["solver"] = "hierarchicalRepulsion"
+    config.layout["hierarchical"]["direction"] = "UD"
+    config.layout["hierarchical"]["sortMethod"] = "directed"
+    config.groups = {}  # vis-network rejects groups=None as an invalid type
+
     return nodes, edges, config
