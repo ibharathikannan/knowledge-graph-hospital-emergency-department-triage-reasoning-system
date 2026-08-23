@@ -2224,6 +2224,69 @@ Expected (confirmed against the actual trained model): `healthy:
 
 ---
 
+## Step 26 — wiring the model into `app.py`
+
+The severity model exists and works (Steps 23–25) but nothing calls it
+yet — the UI still has a manual slider. Replacing that with real vitals
+inputs feeding `predict_severity()` closes the loop: severity stops
+being something you set and becomes something you watch get computed.
+
+Add the import:
+```python
+from ed_triage.predict import predict_severity
+```
+
+Replace the `st.header("Patient")` block (which has the
+`severity = st.slider(...)` line) with:
+
+```python
+st.header("Patient")
+respiratory_rate = st.number_input("Respiratory rate (breaths/min)", min_value=8, max_value=40, value=18)
+spo2 = st.number_input("SpO2 (%)", min_value=50, max_value=100, value=97)
+heart_rate = st.number_input("Heart rate (bpm)", min_value=30, max_value=200, value=80)
+systolic_bp = st.number_input("Systolic BP (mmHg)", min_value=60, max_value=220, value=120)
+temperature = st.number_input("Temperature (°C)", min_value=33.0, max_value=42.0, value=37.0, step=0.1)
+age = st.number_input("Age", min_value=0, max_value=120, value=50)
+
+vitals = {
+    "respiratory_rate": respiratory_rate,
+    "spo2": spo2,
+    "heart_rate": heart_rate,
+    "systolic_bp": systolic_bp,
+    "temperature": temperature,
+    "age": age,
+}
+severity = predict_severity(vitals)
+st.metric("Predicted severity", f"{severity:.2f}")
+
+patient = {"severity": severity, "spo2": spo2, "age": age}
+```
+
+`st.metric()` is a new widget — a labeled number displayed prominently,
+like a KPI tile. Using it here is deliberate: it visually separates
+"things you typed" (the vitals) from "the one number the model
+computed." Everything below this block — `fire()`, `resolve()`,
+`explain()`, `run_all()`, the graph — is completely untouched. `patient`
+still only carries `severity`, `spo2`, `age`, exactly as always; the
+rule engine has no idea a model is involved.
+
+**Verify:**
+
+```bash
+streamlit run app.py
+```
+
+Confirmed against the real pipeline: sick vitals (RR 28, SpO2 88, HR
+130, BP 85, temp 39.5, age 82) → metric shows `0.54` → disposition
+`ImmediateTreatment`, citing `R3_low_oxygen` (SpO2 88 independently
+fires the low-oxygen rule and overrides everything else, even though
+0.54 alone would only trigger mid-severity). Set everything back to
+normal (RR 16, SpO2 98, HR 75, BP 120, temp 37, age 35) — severity
+should drop toward `0.12` and the decision flip to `HomeCare`, live as
+each field changes.
+
+---
+
 ## Where things stand
 
 - `knowledge_graph.py` — clinical knowledge graph, rules loaded from
@@ -2234,15 +2297,14 @@ Expected (confirmed against the actual trained model): `healthy:
   Chain, done.
 - `tests/test_rule_engine.py` — 17 tests covering all three modules
   above, done (Steps 14–16).
-- `app.py` — Streamlit UI: patient + bed inputs, decision, structured
-  explanation, validator results, and the live-highlighted interactive
-  reasoning graph (Steps 17–22).
+- `app.py` — Streamlit UI: real vitals inputs feeding a trained severity
+  model, decision, structured explanation, validator results, and the
+  live-highlighted interactive reasoning graph (Steps 17–22, 26).
 - `explanation.py` — structured, patient-specific explanations (Step 19).
 - `graph_viz.py` — shared drawing logic for `visualize_graph.py`
   (matplotlib) and the app (`streamlit-agraph`) (Steps 20, 22).
 - `data/generate_training_data.py`, `train_model.py`, `predict.py` —
   synthetic data, a trained logistic regression severity model, and a
-  clean prediction wrapper (Steps 23–25). Not yet wired into `app.py` —
-  the UI still has the manual severity slider.
+  clean prediction wrapper, fully wired into the UI (Steps 23–26).
 - Not built yet: `demo.py`, retrieval, bed optimizer, orchestrator,
   Azure deployment.
