@@ -7,10 +7,21 @@ what to paste and how to verify it before moving on.
 ## Setup
 
 ```bash
-conda create -p venv python==3.11 -y
-conda activate venv
+conda create -p venv python=3.11 -y
+conda activate .\venv
 pip install -r requirements.txt
+streamlit run app.py
 ```
+
+**Important — always activate with `.\venv`, never bare `venv`.** If you
+(or anyone else on this machine) ever has another conda env literally
+named `venv` anywhere in the default envs folder, `conda activate venv`
+resolves by *name* and can silently activate the wrong one instead of
+this project's local environment — with no error, just a different
+(possibly much older) Python underneath. The leading `.\` forces conda
+to treat it as a path to *this* folder specifically. Confirm you're in
+the right place any time with `python --version` — it should say
+`3.11.x`.
 
 `requirements.txt`:
 ```
@@ -1522,6 +1533,326 @@ flip to ✅ live, no page reload.
 
 ---
 
+## Step 19 — structured, patient-specific explanations
+
+Right up to this point, "explanation" was just the rule's *static*
+description text (`"SpO2 below 92% is emergent..."`) — it never showed
+the patient's actual number. Real explainability means showing which
+specific value crossed which specific threshold.
+
+### Part A — `ed_triage/explanation.py`
+
+```python
+"""
+Turns a Decision into a structured, patient-specific explanation --
+not the rule's static description, but which actual values triggered it.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from ed_triage.knowledge_graph import conditions_of
+
+_OP_WORDS = {
+    ">": "above",
+    ">=": "at or above",
+    "<": "below",
+    "<=": "at or below",
+    "==": "equal to",
+}
+
+
+@dataclass
+class Factor:
+    rule_id: str
+    feature: str
+    patient_value: float
+    op: str
+    threshold: float
+
+    def as_text(self) -> str:
+        word = _OP_WORDS.get(self.op, self.op)
+        return f"{self.feature} = {self.patient_value} is {word} the threshold of {self.threshold} ({self.rule_id})"
+
+
+def explain(g, patient: dict, decision) -> list[Factor]:
+    """One Factor per condition of every winning rule."""
+    factors = []
+    for rule_id in decision.winning_rules:
+        for cond in conditions_of(g, rule_id):
+            factors.append(
+                Factor(
+                    rule_id=rule_id,
+                    feature=cond["feature"],
+                    patient_value=patient.get(cond["feature"]),
+                    op=cond["op"],
+                    threshold=cond["value"],
+                )
+            )
+    return factors
+
+
+def summarize(decision, factors: list[Factor]) -> str:
+    if decision.disposition is None:
+        return "No rule matched this patient -- nothing to explain."
+    factor_texts = "; ".join(f.as_text() for f in factors)
+    return f"{decision.disposition} because {factor_texts}."
+```
+
+`explain()` reuses `conditions_of()` from Step 5, but now pulls the
+patient's *actual* value for that feature instead of just the rule's
+static text. `summarize()` turns that structured list into one readable
+sentence.
+
+**Verify:**
+
+```bash
+python -c "
+from ed_triage.knowledge_graph import build_graph
+from ed_triage.rule_engine import fire, resolve
+from ed_triage.explanation import explain, summarize
+
+g = build_graph()
+patient = {'severity': 0.43, 'spo2': 90, 'age': 52}  # P007
+decision = resolve(g, fire(g, patient))
+factors = explain(g, patient, decision)
+for f in factors:
+    print(f.as_text())
+print()
+print(summarize(decision, factors))
+"
+```
+
+Expected:
+```
+spo2 = 90 is below the threshold of 92 (R3_low_oxygen)
+
+ImmediateTreatment because spo2 = 90 is below the threshold of 92 (R3_low_oxygen).
+```
+
+### Part B — wiring it into `app.py`
+
+Add the import:
+
+```python
+from ed_triage.explanation import explain, summarize
+```
+
+Replace the `st.header("Result")` block with:
+
+```python
+st.header("Result")
+if decision.disposition:
+    st.subheader(decision.disposition)
+    factors = explain(g, patient, decision)
+    st.write(summarize(decision, factors))
+    for f in factors:
+        st.write(f"- {f.as_text()}")
+else:
+    st.subheader("No rule fired")
+```
+
+Same shape as before — `explain()` needs `patient` this time, so this
+call must come after `patient = {...}` is defined.
+
+**Verify:**
+
+```bash
+streamlit run app.py
+```
+
+Severity 0.43, SpO2 90, age 52 should show:
+> **ImmediateTreatment**
+> ImmediateTreatment because spo2 = 90 is below the threshold of 92 (R3_low_oxygen).
+> - spo2 = 90 is below the threshold of 92 (R3_low_oxygen)
+
+Move SpO2 above 92 with severity mid-range (say 0.5) — the explanation
+should shift live to cite the mid-severity rule's actual threshold
+instead.
+
+---
+
+## Step 20 — the graph, embedded live in the app
+
+`visualize_graph.py`'s drawing logic gets pulled into a shared module so
+both it and `app.py` can use it, and gains highlighting for whichever
+rules are active for the current patient.
+
+### Part A — `ed_triage/graph_viz.py`
+
+```python
+"""
+Draws the clinical knowledge graph with matplotlib. Shared by the
+standalone visualize_graph.py script and the Streamlit app -- both just
+call draw_graph() and do something different with the returned Figure.
+"""
+from __future__ import annotations
+
+import matplotlib.pyplot as plt
+import networkx as nx
+
+COLORS = {
+    "rule": "#4FC7B8",         # teal
+    "condition": "#8FB3DE",    # blue
+    "disposition": "#E7B25C",  # amber
+}
+EDGE_STYLES = {"requires": "solid", "recommends": "dashed", "overrides": "dotted"}
+FIRED_COLOR = "#FFD54A"    # bright yellow -- fired, but didn't drive the final decision
+WINNING_COLOR = "#E4572E"  # red-orange -- actually drove the decision
+
+
+def draw_graph(g: nx.DiGraph, fired: list[str] | None = None, winning: list[str] | None = None):
+    fired = fired or []
+    winning = winning or []
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+    pos = nx.spring_layout(g, seed=7, k=0.9)
+
+    node_colors = []
+    node_sizes = []
+    for n in g.nodes:
+        if n in winning:
+            node_colors.append(WINNING_COLOR)
+            node_sizes.append(2000)
+        elif n in fired:
+            node_colors.append(FIRED_COLOR)
+            node_sizes.append(1700)
+        else:
+            node_colors.append(COLORS[g.nodes[n]["kind"]])
+            node_sizes.append(1400)
+
+    nx.draw_networkx_nodes(g, pos, node_color=node_colors, node_size=node_sizes, ax=ax)
+    nx.draw_networkx_labels(g, pos, font_size=7, ax=ax)
+
+    for edge_type, style in EDGE_STYLES.items():
+        edges = [(u, v) for u, v, d in g.edges(data=True) if d["type"] == edge_type]
+        nx.draw_networkx_edges(g, pos, edgelist=edges, style=style, connectionstyle="arc3,rad=0.08", ax=ax)
+
+    ax.set_title("ED Triage Clinical Knowledge Graph")
+    ax.axis("off")
+    fig.tight_layout()
+    return fig
+```
+
+Almost identical to what was already in `visualize_graph.py`, with one
+change: instead of drawing straight to the current global figure and
+calling `plt.show()`/`plt.savefig()`, it takes an explicit `fig, ax`
+and returns the figure object — so the caller decides what to do with
+it.
+
+Simplify `visualize_graph.py` to use it instead of duplicating the
+drawing code:
+
+```python
+"""
+Quick visual check of the clinical knowledge graph.
+Run: python visualize_graph.py
+"""
+import matplotlib.pyplot as plt
+
+from ed_triage.knowledge_graph import build_graph
+from ed_triage.graph_viz import draw_graph
+
+
+def main():
+    g = build_graph()
+    fig = draw_graph(g)
+    fig.savefig("graph.png", dpi=150)
+    print("Saved to graph.png")
+    plt.show()
+
+
+if __name__ == "__main__":
+    main()
+```
+
+**Verify:**
+
+```bash
+python visualize_graph.py
+```
+
+Should look exactly like before — same picture, drawn by shared code
+instead of duplicated code.
+
+### Part B — wiring it into `app.py`
+
+Add the import:
+
+```python
+import matplotlib.pyplot as plt
+from ed_triage.graph_viz import draw_graph
+```
+
+Add this near the bottom, after the Validation section:
+
+```python
+st.header("Reasoning graph")
+fig = draw_graph(g, fired=fired, winning=decision.winning_rules)
+st.pyplot(fig)
+plt.close(fig)
+```
+
+`plt.close(fig)` matters specifically because of Streamlit's rerun
+model (Step 17): every widget touch reruns the whole script, so
+`draw_graph()` creates a brand-new figure every time. Without closing
+it, matplotlib keeps every old one in memory — harmless at first, but
+it piles up and eventually throws a "too many open figures" warning.
+Closing it right after display means only one figure ever exists at a
+time.
+
+**Verify:**
+
+```bash
+streamlit run app.py
+```
+
+Severity 0.94 (fires only `R1_high_severity`) — that node should show
+red-orange (winning), everything else its normal color. Age 79 +
+severity 0.5 (the case where R4 and R5 both fire and agree) — two rule
+nodes should turn red-orange at once, visually confirming what was
+verified in code a few messages ago.
+
+---
+
+## Step 21 — a live caption to verify fired/winning rules in the browser
+
+The graph shows color but no legend or text — a yellow node ("fired,
+but lost to an override") looks identical in kind to a red one at a
+glance, and neither is labeled anywhere on the page. Add a caption
+right above the graph so the ground truth is always visible next to
+the picture, updating live as the sliders move — no separate script
+needed.
+
+Replace the `st.header("Reasoning graph")` line from Step 20 with:
+
+```python
+st.header("Reasoning graph")
+beaten = [r for r in fired if r not in decision.winning_rules]
+st.caption(f"🟡 fired but overridden: {beaten or 'none'}  |  🔴 winning: {decision.winning_rules}")
+fig = draw_graph(g, fired=fired, winning=decision.winning_rules)
+st.pyplot(fig)
+plt.close(fig)
+```
+
+(the `fig`/`st.pyplot`/`plt.close` lines are unchanged from Step 20 —
+just insert `beaten = ...` and `st.caption(...)` between the header and
+`fig = draw_graph(...)`.)
+
+**Verify:**
+
+```bash
+streamlit run app.py
+```
+
+Severity 0.43, SpO2 90, age 52 (P007) — caption should read
+`🟡 fired but overridden: ['R5_mid_severity']  |  🔴 winning: ['R3_low_oxygen']`,
+matching the picture (R5 yellow, R3 red). Drag SpO2 back above 92 — the
+caption flips live to `🟡 fired but overridden: none  |  🔴 winning: ['R5_mid_severity']`,
+watched directly in the browser as the slider moves.
+
+---
+
 ## Where things stand
 
 - `knowledge_graph.py` — clinical knowledge graph, rules loaded from
@@ -1532,5 +1863,11 @@ flip to ✅ live, no page reload.
   Chain, done.
 - `tests/test_rule_engine.py` — 17 tests covering all three modules
   above, done (Steps 14–16).
+- `app.py` — Streamlit UI: patient + bed inputs, decision, structured
+  explanation, validator results, and the live-highlighted reasoning
+  graph (Steps 17–20).
+- `explanation.py` — structured, patient-specific explanations (Step 19).
+- `graph_viz.py` — shared drawing logic for `visualize_graph.py` and
+  the app (Step 20).
 - Not built yet: `demo.py`, severity model (ML), retrieval, bed
   optimizer, orchestrator, Azure deployment.

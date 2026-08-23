@@ -3,56 +3,15 @@ Quick visual check of the clinical knowledge graph.
 Run: python visualize_graph.py
 """
 import matplotlib.pyplot as plt
-import networkx as nx
 
 from ed_triage.knowledge_graph import build_graph
-
-COLORS = {
-    "rule": "#4FC7B8",         # teal
-    "condition": "#8FB3DE",    # blue
-    "disposition": "#E7B25C",  # amber
-}
-EDGE_STYLES = {"requires": "solid", "recommends": "dashed", "overrides": "dotted"}
+from ed_triage.graph_viz import draw_graph
 
 
 def main():
     g = build_graph()
-    pos = nx.spring_layout(g, seed=7, k=1.2)  # Increased spacing for label readability
-
-    # Draw nodes and node labels
-    node_colors = [COLORS[g.nodes[n]["kind"]] for n in g.nodes]
-    nx.draw_networkx_nodes(g, pos, node_color=node_colors, node_size=1600)
-    nx.draw_networkx_labels(g, pos, font_size=7, font_weight="bold")
-
-    # Draw edges grouped by edge style
-    for edge_type, style in EDGE_STYLES.items():
-        edges = [(u, v) for u, v, d in g.edges(data=True) if d.get("type") == edge_type]
-        nx.draw_networkx_edges(
-            g,
-            pos,
-            edgelist=edges,
-            style=style,
-            arrowstyle="-|>",
-            arrowsize=12,
-            connectionstyle="arc3,rad=0.08",
-        )
-
-    # ---- EXPLICIT EDGE TYPE LABELS ----
-    edge_labels = nx.get_edge_attributes(g, "type")
-    nx.draw_networkx_edge_labels(
-        g,
-        pos,
-        edge_labels=edge_labels,
-        font_color="#D32F2F",  # Explicit red text for clarity
-        font_size=8,
-        font_weight="bold",
-        rotate=False,
-    )
-
-    plt.title("ED Triage Clinical Knowledge Graph")
-    plt.axis("off")
-    plt.tight_layout()
-    plt.savefig("graph.png", dpi=150)
+    fig = draw_graph(g)
+    fig.savefig("graph.png", dpi=150)
     print("Saved to graph.png")
     plt.show()
 
