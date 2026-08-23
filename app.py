@@ -23,6 +23,13 @@ st.markdown(
         margin-left: 0 !important;
         margin-right: auto !important;
     }
+    @media (max-width: 768px) {
+        div[data-testid="stIFrame"] {
+            transform: scale(0.55);
+            transform-origin: top left;
+            margin-bottom: -338px;  /* pulls up the blank space the scale leaves behind */
+        }
+    }
     </style>
     """,
     unsafe_allow_html=True,
