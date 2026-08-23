@@ -4,15 +4,19 @@ standalone visualize_graph.py script and the Streamlit app -- both just
 call draw_graph() and do something different with the returned Figure.
 """
 from __future__ import annotations
+from streamlit_agraph import Node, Edge, Config
 
 import matplotlib.pyplot as plt
 import networkx as nx
+import matplotlib.pyplot as plt
+import networkx as nx
+from streamlit_agraph import Node, Edge, Config
 
-COLORS = {
-    "rule": "#4FC7B8",         # teal
-    "condition": "#8FB3DE",    # blue
-    "disposition": "#E7B25C",  # amber
-}
+
+
+COLORS = {"rule": "#4FC7B8", "condition": "#8FB3DE", "disposition": "#E7B25C"}
+NODE_SHAPES = {"rule": "dot", "condition": "dot", "disposition": "box"}
+EDGE_COLORS = {"requires": "#999999", "recommends": "#E7B25C", "overrides": "#E4572E"}
 EDGE_STYLES = {"requires": "solid", "recommends": "dashed", "overrides": "dotted"}
 FIRED_COLOR = "#FFD54A"    # bright yellow -- fired, but didn't drive the final decision
 WINNING_COLOR = "#E4572E"  # red-orange -- actually drove the decision
@@ -49,3 +53,50 @@ def draw_graph(g: nx.DiGraph, fired: list[str] | None = None, winning: list[str]
     ax.axis("off")
     fig.tight_layout()
     return fig
+
+def build_agraph(g: nx.DiGraph, fired: list[str] | None = None, winning: list[str] | None = None):
+    fired = fired or []
+    winning = winning or []
+
+    nodes = []
+    for n, data in g.nodes(data=True):
+        kind = data["kind"]
+        if n in winning:
+            color, size, glow = WINNING_COLOR, 35, True
+        elif n in fired:
+            color, size, glow = FIRED_COLOR, 30, True
+        else:
+            color, size, glow = COLORS[kind], 20, False
+        nodes.append(
+            Node(
+                id=n,
+                label=n,
+                size=size,
+                shape=NODE_SHAPES[kind],
+                color=color,
+                shadow=glow,
+                borderWidth=3 if glow else 1,
+                font={"color": "#F5F5F5", "size": 14, "strokeWidth": 3, "strokeColor": "#000000"},
+            )
+        )
+
+    edges = [
+        Edge(
+            source=u,
+            target=v,
+            color=EDGE_COLORS[d["type"]],
+            dashes=(d["type"] != "requires"),
+            width=2,
+        )
+        for u, v, d in g.edges(data=True)
+    ]
+
+    config = Config(
+        width=1100,
+        height=750,
+        directed=True,
+        physics=True,
+        hierarchical=False,
+        backgroundColor="#1E1E1E",
+    )
+    return nodes, edges, config

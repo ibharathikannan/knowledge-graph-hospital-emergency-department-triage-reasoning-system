@@ -10,6 +10,8 @@ from ed_triage.rule_engine import fire, resolve
 from ed_triage.validators import run_all
 from ed_triage.explanation import explain, summarize
 from ed_triage.graph_viz import draw_graph
+from streamlit_agraph import agraph
+from ed_triage.graph_viz import build_agraph
 
 st.set_page_config(page_title="ED Triage Reasoning", layout="wide")
 st.title("ED Triage Reasoning System")
@@ -51,6 +53,5 @@ for check in checks:
 st.header("Reasoning graph")
 beaten = [r for r in fired if r not in decision.winning_rules]
 st.caption(f"🟡 fired but overridden: {beaten or 'none'}  |  🔴 winning: {decision.winning_rules}")
-fig = draw_graph(g, fired=fired, winning=decision.winning_rules)
-st.pyplot(fig)
-plt.close(fig)
+nodes, edges, config = build_agraph(g, fired=fired, winning=decision.winning_rules)
+agraph(nodes=nodes, edges=edges, config=config)
